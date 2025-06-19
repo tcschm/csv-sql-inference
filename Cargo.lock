@@ -111,7 +111,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "csv-sql-inference"
+name = "csv_sql_inference"
 version = "0.1.0"
 dependencies = [
  "chrono",
