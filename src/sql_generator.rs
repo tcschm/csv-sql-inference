@@ -13,7 +13,7 @@ pub fn generate_sql(table_name: &str, headers: &StringRecord, types: &[SqlType])
                 SqlType::Integer => "INTEGER".to_string(),
                 SqlType::BigInt => "BIGINT".to_string(),
                 SqlType::Float => "FLOAT".to_string(),
-                SqlType::Varchar(len) => format!("VARCHAR({})", len.max(&1)),
+                SqlType::Varchar(len) => format!("VARCHAR({})", len.max(1)),
                 SqlType::Date => "DATE".to_string(),
                 SqlType::Datetime => "DATETIME".to_string(),
                 SqlType::Text => "TEXT".to_string(),

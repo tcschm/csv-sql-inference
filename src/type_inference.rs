@@ -43,34 +43,44 @@ pub fn infer_sql_type(column_data: &[&str]) -> SqlType {
     let mut all_floats = true;
     let mut all_dates = true;
     let mut all_datetimes = true;
+    let mut has_only_empty_strings = true; // track if all values encountered are empty
 
-    for value in column_data {
-        max_len = max_len.max(value.len());
+    for value_str in column_data {
+        max_len = max_len.max(value_str.len());
 
-        if all_integers && value.parse::<i32>().is_err() {
+        if value_str.is_empty() {
+            // we allow nullable
+            continue;
+        }
+        has_only_empty_strings = false;
+
+        if all_integers && value_str.parse::<i32>().is_err() {
             all_integers = false;
         }
-        if all_bigints && value.parse::<i64>().is_err() {
+        if all_bigints && value_str.parse::<i64>().is_err() {
             all_bigints = false;
         }
-        if all_floats && value.parse::<f64>().is_err() { // using f64 for float
+        if all_floats && value_str.parse::<f64>().is_err() {
             all_floats = false;
         }
-        if all_dates && NaiveDate::parse_from_str(value, DATE_FORMAT).is_err() {
+        if all_dates && NaiveDate::parse_from_str(value_str, DATE_FORMAT).is_err() {
             all_dates = false;
         }
-        if all_datetimes && NaiveDateTime::parse_from_str(value, DATETIME_FORMAT).is_err() {
+        if all_datetimes && NaiveDateTime::parse_from_str(value_str, DATETIME_FORMAT).is_err() {
             all_datetimes = false;
         }
     }
 
-    if all_integers {
+    if has_only_empty_strings {
+        // if the column had data rows, but all of them were empty strings.
+        SqlType::Varchar(max_len) // max_len will be 0 if all strings were indeed empty.
+    } else if all_integers {
         SqlType::Integer
     } else if all_bigints {
         SqlType::BigInt
     } else if all_floats {
         SqlType::Float
-    } else if all_datetimes { // check datetime before date
+    } else if all_datetimes { // check datetime before date as datetime is more specific
         SqlType::Datetime
     } else if all_dates {
         SqlType::Date

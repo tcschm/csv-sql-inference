@@ -166,4 +166,54 @@ mod tests {
         let result = infer_schema(reader);
         assert!(result.is_err()); // expecting an error from the csv parsing
     }
+
+    #[test]
+    fn test_infer_schema_performance_many_rows() {
+        use std::time::Instant;
+        use std::io::Cursor;
+
+        let num_rows = 1_000_000;
+        let mut csv_data_str = String::with_capacity(num_rows * 50); // pre-allocate for rough estimate
+        csv_data_str.push_str("id,name,value,timestamp,flag\n");
+
+        let sample_rows_templates = [
+            "{},Alice,10.5,2023-01-01 10:00:00,true\n",
+            "{},Bob,20,2023-01-02 12:00:00,false\n",
+            "{},Charlie,3000000000,2023-01-03 14:30:00,true\n",
+            "{},David,,2023-01-04 16:00:00,false\n", // empty value for "value"
+            "{},Eve,5.0,invalid-date,true\n",       // invalid date for "timestamp"
+        ];
+
+        for i in 0..num_rows {
+            let id = i + 1;
+            let row_template = sample_rows_templates[i % sample_rows_templates.len()];
+            csv_data_str.push_str(&row_template.replace("{}", &id.to_string()));
+        }
+
+        let reader = Cursor::new(csv_data_str);
+
+        let start_time = Instant::now();
+        let result = infer_schema(reader);
+        let duration = start_time.elapsed();
+
+        assert!(result.is_ok(), "schema inference failed for {} rows: {:?}", num_rows, result.err());
+        let (headers, types) = result.unwrap();
+
+        // use `cargo test -- --nocapture` to see this output
+        println!("\nperformance test: inferred schema for {} data rows in {:?}", num_rows, duration);
+        // println!("headers: {:?}", headers);
+        // println!("types: {:?}", types);
+
+        let expected_headers = StringRecord::from(vec!["id", "name", "value", "timestamp", "flag"]);
+        assert_eq!(headers, expected_headers);
+
+        let expected_types = vec![
+            SqlType::Integer,       // id (all unique integers)
+            SqlType::Varchar(7),    // name (charlie)
+            SqlType::Varchar(10),   // value (3000000000, forced varchar by "")
+            SqlType::Varchar(19),   // timestamp (datetime format, forced varchar by "invalid-date")
+            SqlType::Varchar(5),    // flag (false)
+        ];
+        assert_eq!(types, expected_types);
+    }
 }
