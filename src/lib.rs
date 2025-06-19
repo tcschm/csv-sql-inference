@@ -12,7 +12,33 @@ pub use sql_generator::generate_sql;
 pub fn infer_schema<R: Read>(reader: R) -> io::Result<(StringRecord, Vec<SqlType>)> {
     let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(reader);
     let headers = rdr.headers()?.clone();
-    let records: Vec<StringRecord> = rdr.records().collect::<Result<Vec<_>, _>>()?;
+
+    // if headers were expected but are empty (0 fields),
+    // this implies an empty or malformed csv input that csv::Reader::headers()
+    // should have errored on for completely empty input.
+    // this check makes the function robust if headers() unexpectedly returns ok with 0 fields.
+    if rdr.has_headers() && headers.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "csv input is empty or headers are malformed (0 fields)",
+        ));
+    }
+    // attempt to collect all records. if a csv::error occurs, handle it.
+    let records = match rdr.records().collect::<Result<Vec<_>, csv::Error>>() {
+        Ok(recs) => recs,
+        Err(csv_err) => {
+            // if the csv error is specifically for unequal record lengths,
+            // we ensure it's mapped to io::errorkind::invaliddata.
+            // the csv crate (version 1.3.1) should ideally handle this mapping correctly
+            // via its `from<csv::error> for io::error` implementation.
+            // this explicit check provides a safeguard or override if the observed behavior differs.
+            if matches!(csv_err.kind(), csv::ErrorKind::UnequalLengths { .. }) {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, csv_err));
+            } else {
+                return Err(io::Error::from(csv_err)); // use default conversion for other csv errors
+            }
+        }
+    };
 
     let num_columns = headers.len();
     let inferred_types = (0..num_columns)
@@ -85,8 +111,9 @@ mod tests {
 
     #[test]
     fn test_infer_schema_empty_values() {
-        // current infer_sql_type treats "" as a string that fails parsing for numbers/dates.
-        // if other values make it an integer/float, it will be inferred as such.
+        // with the strict inference, empty strings ("") cause a column to become varchar
+        // because "" is not a valid integer, float, date, etc. for the entire column.
+        // the varchar length is determined by the longest value in the column.
         let csv_data = "name,age,score\nAlice,,100\nBob,24,\nCharlie,30,90.5";
         let reader = Cursor::new(csv_data);
         let (headers, types) = infer_schema(reader).unwrap();
@@ -96,8 +123,8 @@ mod tests {
             types,
             vec![
                 SqlType::Varchar(7), // charlie
-                SqlType::Integer,    // age column: ["", "24", "30"] -> integer (due to "24", "30")
-                SqlType::Float       // score column: ["100", "", "90.5"] -> float (due to "90.5")
+                SqlType::Varchar(2), // age column: ["", "24", "30"] -> varchar(2) due to "", max_len is "24" or "30"
+                SqlType::Varchar(4)  // score column: ["100", "", "90.5"] -> varchar(4) due to "", max_len is "90.5"
             ]
         );
     }

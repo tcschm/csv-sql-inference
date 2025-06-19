@@ -14,49 +14,66 @@ pub enum SqlType {
     Text,
 }
 
-// infers the sql type for a column based on its string values.
-// the function iterates through each value in the column:
-// - if a value can be parsed as a date (format: yyyy-mm-dd), the function immediately returns sqltype::date.
-// - otherwise, if a value can be parsed as a datetime (format: yyyy-mm-dd hh:mm:ss), it immediately returns sqltype::datetime.
-// - if no date or datetime is found after checking all values, the inference proceeds:
-//   - numeric flags (has_integer, has_float) are updated for each non-date/datetime value.
-//   - if any value was parsable as a float, the column type is sqltype::float.
-//   - otherwise, if any value was parsable as an integer, the column type is sqltype::integer.
-//   - otherwise (e.g., all strings, or mixed with unparsable content not meeting numeric criteria),
-//     the column type is sqltype::varchar with a length determined by the longest string encountered.
+// infers the strictest possible sql type that can represent all non-empty string values in a column.
+// the function iterates through each value, attempting to parse it into several predefined types.
+// it maintains flags for whether all values encountered so far could fit into integer (i32),
+// bigint (i64), float (f64), date (yyyy-mm-dd), or datetime (yyyy-mm-dd hh:mm:ss).
+// an empty string in the column will prevent inference of any of these specific types;
+// if empty strings are present, or if values are mixed such that no single specific type
+// (other than varchar) applies to all, the column will be inferred as varchar.
 //
-// note: empty strings or strings that don't parse into any specific type
-// contribute to varchar length. if a column contains mixed data like "123" and "abc"
-// (and no dates/datetimes), it will be inferred as sqltype::integer due to "123",
-// as per the current logic and tests.
+// the hierarchy for type determination, from strictest to most general, is:
+// 1. integer: if all values parse as i32.
+// 2. bigint: if not all integer, but all values parse as i64.
+// 3. float: if not all bigint, but all values parse as f64.
+// 4. datetime: if not float, and all values parse as datetime ("%y-%m-%d %h:%m:%s").
+// 5. date: if not datetime, and all values parse as date ("%y-%m-%d").
+// 6. varchar: otherwise, with length determined by the longest string encountered.
+//
+// empty strings ("") are not considered valid for integer, bigint, float, date, or datetime types.
+// if a column is empty or contains only empty strings, it's inferred as varchar(0).
 pub fn infer_sql_type(column_data: &[&str]) -> SqlType {
-    let mut has_float = false;
-    let mut has_integer = false;
-    let mut max_len = 0;
-
     if column_data.is_empty() {
         return SqlType::Varchar(0);
     }
 
+    let mut max_len = 0;
+    let mut all_integers = true;
+    let mut all_bigints = true;
+    let mut all_floats = true;
+    let mut all_dates = true;
+    let mut all_datetimes = true;
+
     for value in column_data {
         max_len = max_len.max(value.len());
-        if value.parse::<i32>().is_ok() {
-            has_integer = true;
-        } else if value.parse::<f32>().is_ok() {
-            has_float = true;
+
+        if all_integers && value.parse::<i32>().is_err() {
+            all_integers = false;
         }
-        // date/datetime checks have early returns
-        if NaiveDate::parse_from_str(value, DATE_FORMAT).is_ok() {
-            return SqlType::Date;
-        } else if NaiveDateTime::parse_from_str(value, DATETIME_FORMAT).is_ok() {
-            return SqlType::Datetime;
+        if all_bigints && value.parse::<i64>().is_err() {
+            all_bigints = false;
+        }
+        if all_floats && value.parse::<f64>().is_err() { // using f64 for float
+            all_floats = false;
+        }
+        if all_dates && NaiveDate::parse_from_str(value, DATE_FORMAT).is_err() {
+            all_dates = false;
+        }
+        if all_datetimes && NaiveDateTime::parse_from_str(value, DATETIME_FORMAT).is_err() {
+            all_datetimes = false;
         }
     }
 
-    if has_float {
-        SqlType::Float
-    } else if has_integer {
+    if all_integers {
         SqlType::Integer
+    } else if all_bigints {
+        SqlType::BigInt
+    } else if all_floats {
+        SqlType::Float
+    } else if all_datetimes { // check datetime before date
+        SqlType::Datetime
+    } else if all_dates {
+        SqlType::Date
     } else {
         SqlType::Varchar(max_len)
     }
@@ -69,77 +86,82 @@ mod tests {
     #[test]
     fn test_infer_integer() {
         assert_eq!(infer_sql_type(&["1", "2", "300"]), SqlType::Integer);
+        assert_eq!(infer_sql_type(&["-10", "0", "999"]), SqlType::Integer);
+    }
+
+    #[test]
+    fn test_infer_bigint() {
+        assert_eq!(infer_sql_type(&["1", "2", "3000000000"]), SqlType::BigInt); // 3 bil > i32 max
+        assert_eq!(infer_sql_type(&["-5000000000", "0"]), SqlType::BigInt);
+        // all integers are also bigints, but integer is stricter
+        assert_eq!(infer_sql_type(&["1", "2", "3"]), SqlType::Integer);
     }
 
     #[test]
     fn test_infer_float() {
         assert_eq!(infer_sql_type(&["1.0", "2.5", "3.14"]), SqlType::Float);
+        assert_eq!(infer_sql_type(&["-0.5", "1e5", "2.0"]), SqlType::Float);
     }
 
     #[test]
     fn test_infer_float_mixed_with_int() {
-        // if a float is present, it should become float
         assert_eq!(infer_sql_type(&["1", "2.5", "3"]), SqlType::Float);
+        assert_eq!(infer_sql_type(&["10000000000", "2.5"]), SqlType::Float); // bigint and float
     }
 
     #[test]
-    fn test_infer_date_takes_precedence() {
-        // date parsing returns immediately
+    fn test_infer_date_strict() {
+        // all values must be dates
+        assert_eq!(
+            infer_sql_type(&["2023-01-01", "2024-02-15"]),
+            SqlType::Date
+        );
+        // mixed with non-date becomes varchar
         assert_eq!(
             infer_sql_type(&["2023-01-01", "text", "123"]),
-            SqlType::Date
-        );
-        assert_eq!(
-            infer_sql_type(&["text", "2023-01-01", "123"]),
-            SqlType::Date
+            SqlType::Varchar(10) // "2023-01-01" is longest
         );
     }
 
     #[test]
-    fn test_infer_datetime_takes_precedence() {
-        // datetime parsing returns immediately
+    fn test_infer_datetime_strict() {
+        // all values must be datetimes
+        assert_eq!(
+            infer_sql_type(&["2023-01-01 10:00:00", "2024-02-15 23:59:59"]),
+            SqlType::Datetime
+        );
+        // mixed with non-datetime becomes varchar
         assert_eq!(
             infer_sql_type(&["2023-01-01 10:00:00", "text", "123"]),
-            SqlType::Datetime
-        );
-        assert_eq!(
-            infer_sql_type(&["text", "2023-01-01 10:00:00", "123"]),
-            SqlType::Datetime
+            SqlType::Varchar(19) // "2023-01-01 10:00:00" is longest
         );
     }
 
     #[test]
-    fn test_infer_date_over_datetime_if_date_format_first() {
-        // if a value is a valid date string and checked first, it returns date
+    fn test_infer_mixed_date_and_datetime_is_varchar() {
+        // with strict parsing for all elements, a mix of date and datetime strings becomes varchar
         assert_eq!(
             infer_sql_type(&["2023-01-01", "2023-01-01 12:00:00"]),
-            SqlType::Date
+            SqlType::Varchar(19)
         );
-    }
-
-    #[test]
-    fn test_infer_datetime_if_datetime_format_first() {
-         assert_eq!(
+        assert_eq!(
             infer_sql_type(&["2023-01-01 12:00:00", "2023-01-01"]),
-            SqlType::Datetime
+            SqlType::Varchar(19)
         );
     }
 
     #[test]
     fn test_infer_varchar() {
         assert_eq!(infer_sql_type(&["hello", "world"]), SqlType::Varchar(5));
+        assert_eq!(infer_sql_type(&["apple", "banana", "kiwi"]), SqlType::Varchar(6));
     }
 
     #[test]
-    fn test_infer_varchar_for_mixed_non_date_non_datetime() {
-        // current behavior: if "world" is present, and no date/datetime caused early return,
-        // it will check has_float, then has_integer.
-        // "1" makes has_integer=true. "world" doesn't parse. Loop ends.
-        // has_float=false, has_integer=true. returns integer.
-        // this test documents current behavior, though it might be undesirable.
-        assert_eq!(infer_sql_type(&["1", "world"]), SqlType::Integer);
-        // similarly for float
-        assert_eq!(infer_sql_type(&["1.1", "world"]), SqlType::Float);
+    fn test_infer_varchar_for_mixed_types() {
+        // mixed types that don't all conform to a numeric or date/datetime type become varchar
+        assert_eq!(infer_sql_type(&["1", "world"]), SqlType::Varchar(5));
+        assert_eq!(infer_sql_type(&["1.1", "world"]), SqlType::Varchar(5));
+        assert_eq!(infer_sql_type(&["2023-01-01", "world"]), SqlType::Varchar(10));
         // if only text or unparseable
         assert_eq!(infer_sql_type(&["text", "world"]), SqlType::Varchar(5));
     }
@@ -151,13 +173,17 @@ mod tests {
 
     #[test]
     fn test_infer_column_with_empty_strings() {
-        // empty strings don't parse as numbers/dates, max_len is tracked.
+        // empty strings cause fallback to varchar because they are not valid numbers/dates.
         assert_eq!(infer_sql_type(&["", ""]), SqlType::Varchar(0));
         assert_eq!(infer_sql_type(&["a", ""]), SqlType::Varchar(1));
+        assert_eq!(infer_sql_type(&["1", ""]), SqlType::Varchar(1));
+        assert_eq!(infer_sql_type(&["1.0", ""]), SqlType::Varchar(3));
+        assert_eq!(infer_sql_type(&["2023-01-01", ""]), SqlType::Varchar(10));
     }
 
     #[test]
     fn test_infer_invalid_date_as_varchar() {
         assert_eq!(infer_sql_type(&["2023-13-01"]), SqlType::Varchar(10)); // invalid month
+        assert_eq!(infer_sql_type(&["not-a-date"]), SqlType::Varchar(10));
     }
 }
