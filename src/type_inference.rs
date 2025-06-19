@@ -8,6 +8,7 @@ pub enum SqlType {
     Integer,
     BigInt,
     Float,
+    Char(usize),
     Varchar(usize),
     Date,
     Boolean,
@@ -32,7 +33,8 @@ pub enum SqlType {
 // 4. float: if not bigint, and all non-empty values parse as f64.
 // 5. datetime: if not float, and all non-empty values parse as datetime ("%y-%m-%d %h:%m:%s").
 // 6. date: if not datetime, and all non-empty values parse as date ("%y-%m-%d").
-// 7. varchar: otherwise, with length determined by the longest string encountered.
+// 7. char(n): if not any of the above, and all non-empty values have the exact same length n.
+// 8. varchar(n): otherwise, with length determined by the longest string encountered.
 // if a column is empty or contains only empty strings, it's inferred as varchar(0).
 pub fn infer_sql_type(column_data: &[&str]) -> SqlType {
     if column_data.is_empty() {
@@ -40,6 +42,8 @@ pub fn infer_sql_type(column_data: &[&str]) -> SqlType {
     }
 
     let mut max_len = 0;
+    let mut first_non_empty_value_len: Option<usize> = None;
+    let mut all_non_empty_have_same_len = true;
     let mut all_integers = true;
     let mut all_bigints = true;
     let mut all_floats = true;
@@ -56,6 +60,17 @@ pub fn infer_sql_type(column_data: &[&str]) -> SqlType {
             continue;
         }
         has_only_empty_strings = false;
+
+        // check for consistent length among non-empty strings
+        if all_non_empty_have_same_len { // only update if still considered true
+            if let Some(len) = first_non_empty_value_len {
+                if value_str.len() != len {
+                    all_non_empty_have_same_len = false;
+                }
+            } else {
+                first_non_empty_value_len = Some(value_str.len());
+            }
+        }
 
         if all_integers && value_str.parse::<i32>().is_err() {
             all_integers = false;
@@ -95,6 +110,11 @@ pub fn infer_sql_type(column_data: &[&str]) -> SqlType {
         SqlType::Datetime
     } else if all_dates {
         SqlType::Date
+    } else if all_non_empty_have_same_len && !has_only_empty_strings {
+        // if all non-empty strings have the same length, and it's not a more specific type.
+        // first_non_empty_value_len is guaranteed to be some if !has_only_empty_strings
+        // and all_non_empty_have_same_len remained true.
+        SqlType::Char(first_non_empty_value_len.unwrap_or(0))
     } else {
         SqlType::Varchar(max_len)
     }
@@ -173,7 +193,9 @@ mod tests {
 
     #[test]
     fn test_infer_varchar() {
-        assert_eq!(infer_sql_type(&["hello", "world"]), SqlType::Varchar(5));
+        // "hello" (len 5) and "world" (len 5) would be char(5).
+        // for varchar, lengths must differ or type must not be char.
+        assert_eq!(infer_sql_type(&["hello", "world!"]), SqlType::Varchar(6)); // different lengths
         assert_eq!(infer_sql_type(&["apple", "banana", "kiwi"]), SqlType::Varchar(6));
     }
 
@@ -194,11 +216,11 @@ mod tests {
 
     #[test]
     fn test_infer_column_with_empty_strings() {
-        // empty strings cause fallback to varchar because they are not valid numbers/dates.
-        // with boolean logic, if other values are boolean, it can still be boolean.
+        // empty strings are treated as nulls and do not dictate the type if other values are present.
+        // if all values are empty strings, it's varchar(0).
         assert_eq!(infer_sql_type(&["", ""]), SqlType::Varchar(0));
-        assert_eq!(infer_sql_type(&["a", ""]), SqlType::Varchar(1));
-        // "1" and "" -> integer because "1" is int, "" is null
+        assert_eq!(infer_sql_type(&["a", ""]), SqlType::Char(1)); // "a" is length 1, "" is null -> char(1)
+        // "1" and "" -> boolean because "1" is a valid boolean, "" is null
         assert_eq!(infer_sql_type(&["1", ""]), SqlType::Boolean);
         // "1.0" and "" -> float
         assert_eq!(infer_sql_type(&["1.0", ""]), SqlType::Float);
@@ -206,6 +228,27 @@ mod tests {
         assert_eq!(infer_sql_type(&["2023-01-01", ""]), SqlType::Date);
         // "true" and "" -> boolean
         assert_eq!(infer_sql_type(&["true", ""]), SqlType::Boolean);
+    }
+    
+    #[test]
+    fn test_infer_char() {
+        assert_eq!(infer_sql_type(&["abc", "def", "ghi"]), SqlType::Char(3));
+        assert_eq!(infer_sql_type(&["fixed", "fixed"]), SqlType::Char(5));
+        assert_eq!(infer_sql_type(&["hello", "world"]), SqlType::Char(5)); // both length 5
+    }
+
+    #[test]
+    fn test_infer_char_with_empty_strings() {
+        assert_eq!(infer_sql_type(&["ab", "", "cd", "", "ef"]), SqlType::Char(2));
+        assert_eq!(infer_sql_type(&["", "xyz", ""]), SqlType::Char(3));
+        assert_eq!(infer_sql_type(&["a", "", "b"]), SqlType::Char(1));
+    }
+
+    #[test]
+    fn test_char_does_not_override_specific_types() {
+        assert_eq!(infer_sql_type(&["1", "2", "3"]), SqlType::Integer); // not char(1)
+        assert_eq!(infer_sql_type(&["T", "F"]), SqlType::Boolean); // not char(1)
+        assert_eq!(infer_sql_type(&["2023-01-01", "2023-01-02"]), SqlType::Date); // not char(10)
     }
 
     #[test]
@@ -221,7 +264,7 @@ mod tests {
 
     #[test]
     fn test_infer_invalid_date_as_varchar() {
-        assert_eq!(infer_sql_type(&["2023-13-01"]), SqlType::Varchar(10)); // invalid month
-        assert_eq!(infer_sql_type(&["not-a-date"]), SqlType::Varchar(10));
+        assert_eq!(infer_sql_type(&["2023-13-01"]), SqlType::Char(10)); // invalid month
+        assert_eq!(infer_sql_type(&["not-a-date"]), SqlType::Char(10));
     }
 }

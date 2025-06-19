@@ -2,14 +2,16 @@
 
 A command-line tool written in Rust that infers SQL data types from a CSV file and generates a `CREATE TABLE` SQL DDL statement. It aims to determine the strictest possible SQL type for each column that can accommodate all its values.
 
-## Features
+## features
 
-- Infers SQL types for columns: `INTEGER`, `BIGINT`, `FLOAT`, `VARCHAR(N)`, `DATE`, `DATETIME`.
+- infers sql types for columns: `integer`, `bigint`, `float`, `char(n)`, `varchar(n)`, `date`, `datetime`, `boolean`.
 - Determines the strictest type that fits all values in a column.
     - e.g., a column with `1`, `2`, `3000000000` will be `BIGINT`.
     - e.g., a column with `1`, `2.0` will be `FLOAT`.
-    - e.g., a column with `1`, `text` will be `VARCHAR`.
-- Handles empty strings: An empty string in a column will typically cause the column to be inferred as `VARCHAR`, as empty strings don't conform to numeric or date types.
+    - e.g., a column with `apple`, `grape` (both length 5, and not a more specific type like boolean/date etc.) will be `CHAR(5)`.
+    - e.g., a column with `apple`, `banana` (lengths 5 and 6) will be `VARCHAR(6)`.
+    - e.g., a column with `1`, `text` (different types, varying lengths if applicable) will be `VARCHAR`.
+- handles empty strings: empty strings are treated as `null` and do not influence the type inference for the non-empty values in the column. if all values in a column are empty, it defaults to `varchar(0)` (which becomes `varchar(1)` in sql due to `max(1)`).
 - Generates `CREATE TABLE` SQL DDL statements.
 - Table name is derived from the input CSV filename (e.g., `my_data.csv` becomes table `my_data`).
 - Column names are taken directly from the CSV header.
@@ -69,10 +71,10 @@ running the command:
 would produce output similar to this (exact varchar lengths depend on the longest string in each respective column):
 
 ```sql
-create table "products" (
+CREATE TABLE "products" (
   "id" integer,
   "product_name" varchar(6),
-  "quantity" varchar(11),
+  "quantity" bigint,
   "price" float,
   "entry_date" varchar(12),
   "last_updated" datetime
@@ -94,4 +96,3 @@ to run the unit and integration tests:
 ```bash
 cargo test
 ```
-
