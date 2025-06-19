@@ -11,8 +11,19 @@ pub use sql_generator::generate_sql;
 
 pub fn infer_schema<R: Read>(reader: R) -> io::Result<(StringRecord, Vec<SqlType>)> {
     let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(reader);
-    let headers = rdr.headers()?.clone();
-    let records: Vec<StringRecord> = rdr.records().collect::<Result<Vec<_>, _>>()?;
+    let headers = rdr.headers()
+        .map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?
+        .clone();
+
+    let records: Vec<StringRecord> = rdr.records()
+        .collect::<Result<Vec<_>, csv::Error>>()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    if headers.is_empty() && records.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "csv input is empty"));
+    }
 
     let num_columns = headers.len();
     let inferred_types = (0..num_columns)
@@ -130,8 +141,8 @@ mod tests {
      #[test]
     fn test_infer_schema_malformed_csv_records() {
         // this test assumes that the csv crate will return an error for records
-        // not matching header length, and that this error is propagated.
-        // the current lib.rs code `records.push(result?);` will propagate csv::error.
+        // not matching header length, and that this error is correctly propagated
+        // by the `collect()` and `map_err` chain.
         // for the function to return io::error, this would need mapping.
         // here, we test the propagation of the underlying csv::error.
         let csv_data = "header1,header2\nval1\nval3,val4"; // second record has too few fields

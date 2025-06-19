@@ -13,9 +13,7 @@ pub fn generate_sql(table_name: &str, headers: &StringRecord, types: &[SqlType])
                 SqlType::Integer => "INTEGER".to_string(),
                 SqlType::BigInt => "BIGINT".to_string(),
                 SqlType::Float => "FLOAT".to_string(),
-                // Ensure VARCHAR length is at least 1, as VARCHAR(0) is often invalid.
-                // ensure varchar length is at least 1, as varchar(0) is often invalid.
-                SqlType::Varchar(len) => format!("VARCHAR({})", len.max(1)),
+                SqlType::Varchar(len) => format!("VARCHAR({})", len.max(&1)),
                 SqlType::Date => "DATE".to_string(),
                 SqlType::Datetime => "DATETIME".to_string(),
                 SqlType::Text => "TEXT".to_string(),
