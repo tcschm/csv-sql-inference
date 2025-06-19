@@ -1,8 +1,8 @@
 use super::{SqlType, StringRecord};
 
-/// Generates a `CREATE TABLE` SQL statement from a table name, headers, and inferred types.
+/// generates a `create table` sql statement from a table name, headers, and inferred types.
 pub fn generate_sql(table_name: &str, headers: &StringRecord, types: &[SqlType]) -> String {
-    // Quote the table name to handle names with spaces or special characters.
+    // quote the table name to handle names with spaces or special characters.
     let mut sql = format!("CREATE TABLE \"{}\" (\n", table_name);
 
     let columns: Vec<String> = headers
@@ -14,12 +14,13 @@ pub fn generate_sql(table_name: &str, headers: &StringRecord, types: &[SqlType])
                 SqlType::BigInt => "BIGINT".to_string(),
                 SqlType::Float => "FLOAT".to_string(),
                 // Ensure VARCHAR length is at least 1, as VARCHAR(0) is often invalid.
-                SqlType::Varchar(len) => format!("VARCHAR({})", len.max(&1)),
+                // ensure varchar length is at least 1, as varchar(0) is often invalid.
+                SqlType::Varchar(len) => format!("VARCHAR({})", len.max(1)),
                 SqlType::Date => "DATE".to_string(),
                 SqlType::Datetime => "DATETIME".to_string(),
                 SqlType::Text => "TEXT".to_string(),
             };
-            // Quote column names to handle spaces or special characters.
+            // quote column names to handle spaces or special characters.
             format!("  \"{}\" {}", header.trim(), type_str)
         })
         .collect();
