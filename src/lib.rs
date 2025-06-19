@@ -111,20 +111,18 @@ mod tests {
 
     #[test]
     fn test_infer_schema_empty_values() {
-        // with the strict inference, empty strings ("") cause a column to become varchar
-        // because "" is not a valid integer, float, date, etc. for the entire column.
-        // the varchar length is determined by the longest value in the column.
+        // empty strings are treated as nulls, allowing other values to determine the type.
         let csv_data = "name,age,score\nAlice,,100\nBob,24,\nCharlie,30,90.5";
         let reader = Cursor::new(csv_data);
         let (headers, types) = infer_schema(reader).unwrap();
-
+        
         assert_eq!(headers, StringRecord::from(vec!["name", "age", "score"]));
         assert_eq!(
             types,
             vec![
                 SqlType::Varchar(7), // charlie
-                SqlType::Varchar(2), // age column: ["", "24", "30"] -> varchar(2) due to "", max_len is "24" or "30"
-                SqlType::Varchar(4)  // score column: ["100", "", "90.5"] -> varchar(4) due to "", max_len is "90.5"
+                SqlType::Integer,    // age column: ["", "24", "30"] -> integer
+                SqlType::Float       // score column: ["100", "", "90.5"] -> float
             ]
         );
     }
@@ -210,9 +208,9 @@ mod tests {
         let expected_types = vec![
             SqlType::Integer,       // id (all unique integers)
             SqlType::Varchar(7),    // name (charlie)
-            SqlType::Varchar(10),   // value (3000000000, forced varchar by "")
+            SqlType::Float,         // value (mix of int, bigint, float, empty strings -> float)
             SqlType::Varchar(19),   // timestamp (datetime format, forced varchar by "invalid-date")
-            SqlType::Varchar(5),    // flag (false)
+            SqlType::Boolean,       // flag ("true", "false", etc.)
         ];
         assert_eq!(types, expected_types);
     }

@@ -10,6 +10,7 @@ pub enum SqlType {
     Float,
     Varchar(usize),
     Date,
+    Boolean,
     Datetime,
     Text,
 }
@@ -17,20 +18,21 @@ pub enum SqlType {
 // infers the strictest possible sql type that can represent all non-empty string values in a column.
 // the function iterates through each value, attempting to parse it into several predefined types.
 // it maintains flags for whether all values encountered so far could fit into integer (i32),
-// bigint (i64), float (f64), date (yyyy-mm-dd), or datetime (yyyy-mm-dd hh:mm:ss).
-// an empty string in the column will prevent inference of any of these specific types;
-// if empty strings are present, or if values are mixed such that no single specific type
-// (other than varchar) applies to all, the column will be inferred as varchar.
+// bigint (i64), float (f64), boolean ("true", "false", "t", "f", "1", "0"), 
+// date (yyyy-mm-dd), or datetime (yyyy-mm-dd hh:mm:ss).
+// empty strings ("") are skipped for type checking, effectively treating them as nullable.
+// if values are mixed such that no single specific type (other than varchar) applies to all 
+// non-empty values, the column will be inferred as varchar.
 //
 // the hierarchy for type determination, from strictest to most general, is:
-// 1. integer: if all values parse as i32.
-// 2. bigint: if not all integer, but all values parse as i64.
-// 3. float: if not all bigint, but all values parse as f64.
-// 4. datetime: if not float, and all values parse as datetime ("%y-%m-%d %h:%m:%s").
-// 5. date: if not datetime, and all values parse as date ("%y-%m-%d").
-// 6. varchar: otherwise, with length determined by the longest string encountered.
-//
-// empty strings ("") are not considered valid for integer, bigint, float, date, or datetime types.
+// 1. boolean: if all non-empty values are "true", "false", "t", "f", "1", "0" (case-insensitive).
+//    this means columns containing only "1"s and "0"s (and empty strings) will be typed as boolean.
+// 2. integer: if not boolean, and all non-empty values parse as i32.
+// 3. bigint: if not integer, and all non-empty values parse as i64.
+// 4. float: if not bigint, and all non-empty values parse as f64.
+// 5. datetime: if not float, and all non-empty values parse as datetime ("%y-%m-%d %h:%m:%s").
+// 6. date: if not datetime, and all non-empty values parse as date ("%y-%m-%d").
+// 7. varchar: otherwise, with length determined by the longest string encountered.
 // if a column is empty or contains only empty strings, it's inferred as varchar(0).
 pub fn infer_sql_type(column_data: &[&str]) -> SqlType {
     if column_data.is_empty() {
@@ -43,6 +45,7 @@ pub fn infer_sql_type(column_data: &[&str]) -> SqlType {
     let mut all_floats = true;
     let mut all_dates = true;
     let mut all_datetimes = true;
+    let mut all_booleans = true;
     let mut has_only_empty_strings = true; // track if all values encountered are empty
 
     for value_str in column_data {
@@ -69,11 +72,19 @@ pub fn infer_sql_type(column_data: &[&str]) -> SqlType {
         if all_datetimes && NaiveDateTime::parse_from_str(value_str, DATETIME_FORMAT).is_err() {
             all_datetimes = false;
         }
+        if all_booleans {
+            let lower_val = value_str.to_lowercase();
+            if !matches!(lower_val.as_str(), "true" | "false" | "t" | "f" | "1" | "0") {
+                all_booleans = false;
+            }
+        }
     }
 
     if has_only_empty_strings {
         // if the column had data rows, but all of them were empty strings.
         SqlType::Varchar(max_len) // max_len will be 0 if all strings were indeed empty.
+    } else if all_booleans { // check boolean first to ensure "1"s and "0"s become boolean
+        SqlType::Boolean
     } else if all_integers {
         SqlType::Integer
     } else if all_bigints {
@@ -184,11 +195,28 @@ mod tests {
     #[test]
     fn test_infer_column_with_empty_strings() {
         // empty strings cause fallback to varchar because they are not valid numbers/dates.
+        // with boolean logic, if other values are boolean, it can still be boolean.
         assert_eq!(infer_sql_type(&["", ""]), SqlType::Varchar(0));
         assert_eq!(infer_sql_type(&["a", ""]), SqlType::Varchar(1));
-        assert_eq!(infer_sql_type(&["1", ""]), SqlType::Varchar(1));
-        assert_eq!(infer_sql_type(&["1.0", ""]), SqlType::Varchar(3));
-        assert_eq!(infer_sql_type(&["2023-01-01", ""]), SqlType::Varchar(10));
+        // "1" and "" -> integer because "1" is int, "" is null
+        assert_eq!(infer_sql_type(&["1", ""]), SqlType::Boolean);
+        // "1.0" and "" -> float
+        assert_eq!(infer_sql_type(&["1.0", ""]), SqlType::Float);
+        // "2023-01-01" and "" -> date
+        assert_eq!(infer_sql_type(&["2023-01-01", ""]), SqlType::Date);
+        // "true" and "" -> boolean
+        assert_eq!(infer_sql_type(&["true", ""]), SqlType::Boolean);
+    }
+
+    #[test]
+    fn test_infer_boolean() {
+        assert_eq!(infer_sql_type(&["true", "false", "TRUE", "FALSE"]), SqlType::Boolean);
+        assert_eq!(infer_sql_type(&["t", "f", "T", "F"]), SqlType::Boolean);
+        assert_eq!(infer_sql_type(&["1", "0"]), SqlType::Boolean);
+        assert_eq!(infer_sql_type(&["1", "0", "true"]), SqlType::Boolean); // mixed non-numeric with numeric-bools
+        assert_eq!(infer_sql_type(&["true", "false", ""]), SqlType::Boolean); // with empty string
+        assert_eq!(infer_sql_type(&["true", "not_bool"]), SqlType::Varchar(8));
+        assert_eq!(infer_sql_type(&["true", "false", "0", "four"]), SqlType::Varchar(5));
     }
 
     #[test]
