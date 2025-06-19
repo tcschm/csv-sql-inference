@@ -78,13 +78,13 @@ mod tests {
 
     #[test]
     fn test_infer_float_mixed_with_int() {
-        // If a float is present, it should become Float
+        // if a float is present, it should become float
         assert_eq!(infer_sql_type(&["1", "2.5", "3"]), SqlType::Float);
     }
 
     #[test]
     fn test_infer_date_takes_precedence() {
-        // Date parsing returns immediately
+        // date parsing returns immediately
         assert_eq!(
             infer_sql_type(&["2023-01-01", "text", "123"]),
             SqlType::Date
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_infer_datetime_takes_precedence() {
-        // Datetime parsing returns immediately
+        // datetime parsing returns immediately
         assert_eq!(
             infer_sql_type(&["2023-01-01 10:00:00", "text", "123"]),
             SqlType::Datetime
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_infer_date_over_datetime_if_date_format_first() {
-        // If a value is a valid date string and checked first, it returns Date
+        // if a value is a valid date string and checked first, it returns date
         assert_eq!(
             infer_sql_type(&["2023-01-01", "2023-01-01 12:00:00"]),
             SqlType::Date
@@ -132,15 +132,15 @@ mod tests {
 
     #[test]
     fn test_infer_varchar_for_mixed_non_date_non_datetime() {
-        // Current behavior: if "world" is present, and no date/datetime caused early return,
+        // current behavior: if "world" is present, and no date/datetime caused early return,
         // it will check has_float, then has_integer.
         // "1" makes has_integer=true. "world" doesn't parse. Loop ends.
-        // has_float=false, has_integer=true. Returns Integer.
-        // This test documents current behavior, though it might be undesirable.
+        // has_float=false, has_integer=true. returns integer.
+        // this test documents current behavior, though it might be undesirable.
         assert_eq!(infer_sql_type(&["1", "world"]), SqlType::Integer);
-        // Similarly for float
+        // similarly for float
         assert_eq!(infer_sql_type(&["1.1", "world"]), SqlType::Float);
-        // If only text or unparseable
+        // if only text or unparseable
         assert_eq!(infer_sql_type(&["text", "world"]), SqlType::Varchar(5));
     }
 
@@ -151,13 +151,13 @@ mod tests {
 
     #[test]
     fn test_infer_column_with_empty_strings() {
-        // Empty strings don't parse as numbers/dates, max_len is tracked.
+        // empty strings don't parse as numbers/dates, max_len is tracked.
         assert_eq!(infer_sql_type(&["", ""]), SqlType::Varchar(0));
         assert_eq!(infer_sql_type(&["a", ""]), SqlType::Varchar(1));
     }
 
     #[test]
     fn test_infer_invalid_date_as_varchar() {
-        assert_eq!(infer_sql_type(&["2023-13-01"]), SqlType::Varchar(10)); // Invalid month
+        assert_eq!(infer_sql_type(&["2023-13-01"]), SqlType::Varchar(10)); // invalid month
     }
 }
