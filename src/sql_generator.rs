@@ -18,7 +18,6 @@ pub fn generate_sql(table_name: &str, headers: &StringRecord, types: &[SqlType])
                 SqlType::Date => "DATE".to_string(),
                 SqlType::Boolean => "BOOLEAN".to_string(),
                 SqlType::Datetime => "DATETIME".to_string(),
-                SqlType::Text => "TEXT".to_string(),
             };
             // quote column names to handle spaces or special characters.
             format!("  \"{}\" {}", header.trim(), type_str)

@@ -13,7 +13,6 @@ pub enum SqlType {
     Date,
     Boolean,
     Datetime,
-    Text,
 }
 
 // infers the strictest possible sql type that can represent all non-empty string values in a column.
