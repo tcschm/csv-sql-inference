@@ -4,10 +4,12 @@ use rayon::prelude::*;
 
 mod type_inference;
 mod sql_generator;
+pub mod python_generator; // declare the new module, make it pub for PkStrategy in main
 mod utils;
 
 pub use type_inference::{infer_sql_type, SqlType};
-pub use sql_generator::generate_sql;
+pub use sql_generator::generate_sql; // for sql ddl
+pub use python_generator::generate_sqlmodel_python; // for python sqlmodel
 
 pub fn infer_schema<R: Read>(reader: R) -> io::Result<(StringRecord, Vec<SqlType>)> {
     let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(reader);
