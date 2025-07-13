@@ -16,7 +16,7 @@ pub fn generate_sqlmodel_python(
     pk_strategy: &PkStrategy,
 ) -> String {
     let class_name = to_pascal_case(table_name);
-    
+
     let mut py_code = String::new();
     // py_code.push_str("from typing import Optional\n"); // no longer needed for `type | none`
     py_code.push_str("from datetime import date, datetime\n");
@@ -30,7 +30,7 @@ pub fn generate_sqlmodel_python(
     if let PkStrategy::CreateColumn(pk_name) = pk_strategy {
         let sanitized_pk_name = pk_name.trim().replace(' ', "_").to_lowercase();
         py_code.push_str(&format!(
-            "    {}: int | None = Field(default=None, primary_key=True)\n",
+            "    {}: int = Field(primary_key=True)\n",
             sanitized_pk_name
         ));
         pk_field_generated_or_identified = true;
@@ -41,7 +41,9 @@ pub fn generate_sqlmodel_python(
 
         // if --pk-create was used, and current header matches the created pk name, skip it
         if let PkStrategy::CreateColumn(pk_name_to_create) = pk_strategy {
-            if original_header_sanitized == pk_name_to_create.trim().replace(' ', "_").to_lowercase() {
+            if original_header_sanitized
+                == pk_name_to_create.trim().replace(' ', "_").to_lowercase()
+            {
                 // this column from csv is being shadowed by the explicitly created pk.
                 // ideally, we'd warn the user or handle this more gracefully.
                 // for now, we skip generating it from the csv data.
@@ -50,46 +52,55 @@ pub fn generate_sqlmodel_python(
         }
 
         let sql_type = &types[i];
-        let field_name = header.trim().replace(' ', "_").to_lowercase(); // basic sanitization
-
-        let (py_type, mut field_params) = match sql_type {
-            SqlType::Integer | SqlType::BigInt => ("int | None", "default=None".to_string()),
-            SqlType::Float => ("float | None", "default=None".to_string()),
-            SqlType::Char(len) => (
-                "str | None",
-                format!("default=None, max_length={}", (*len).max(1)),
-            ),
-            SqlType::Varchar(len) => (
-                "str | None",
-                format!("default=None, max_length={}", (*len).max(1)),
-            ),
-            SqlType::Date => ("date | None", "default=None".to_string()),
-            SqlType::Boolean => ("bool | None", "default=None".to_string()),
-            SqlType::Datetime => ("datetime | None", "default=None".to_string()),
-        };
-
-        // handle --pk-column strategy
-        if let PkStrategy::ExistingColumn(pk_col_name) = pk_strategy {
-            if original_header_sanitized == pk_col_name.trim().replace(' ', "_").to_lowercase() {
-                if !field_params.is_empty() {
-                    field_params.push_str(", ");
+        let field_name = header.trim().replace(' ', "_").to_lowercase();
+        let is_pk = match pk_strategy {
+            PkStrategy::ExistingColumn(pk_name) => {
+                let is_match =
+                    original_header_sanitized == pk_name.trim().replace(' ', "_").to_lowercase();
+                if is_match {
+                    pk_field_generated_or_identified = true;
                 }
-                field_params.push_str("primary_key=True");
-                // todo: consider adding a check here if the inferred type is suitable for a pk (e.g., not float)
-                // and maybe add a comment if it's unusual (e.g. # warning: using float as pk)
-                pk_field_generated_or_identified = true;
+                is_match
             }
+            _ => false,
+        };
+        if is_pk {
+            let pk_py_type = match sql_type {
+                SqlType::Integer | SqlType::BigInt => "int",
+                SqlType::Varchar(_) | SqlType::Char(_) => "str",
+                _ => "int",
+            };
+            py_code.push_str(&format!(
+                "    {}: {} = Field(primary_key=True)\n",
+                field_name, pk_py_type
+            ));
+        } else {
+            let (py_type, field_params) = match sql_type {
+                SqlType::Integer | SqlType::BigInt => ("int | None", "default=None".to_string()),
+                SqlType::Float => ("float | None", "default=None".to_string()),
+                SqlType::Char(len) => (
+                    "str | None",
+                    format!("default=None, max_length={}", (*len).max(1)),
+                ),
+                SqlType::Varchar(len) => (
+                    "str | None",
+                    format!("default=None, max_length={}", (*len).max(1)),
+                ),
+                SqlType::Date => ("date | None", "default=None".to_string()),
+                SqlType::Boolean => ("bool | None", "default=None".to_string()),
+                SqlType::Datetime => ("datetime | None", "default=None".to_string()),
+            };
+            py_code.push_str(&format!(
+                "    {}: {} = Field({})\n",
+                field_name, py_type, field_params
+            ));
         }
-
-        py_code.push_str(&format!(
-            "    {}: {} = Field({})\n",
-            field_name, py_type, field_params
-        ));
     }
 
     if !pk_field_generated_or_identified && !headers.is_empty() {
         // this condition means headers were present, fields were generated, but no pk was made.
-        py_code.push_str("    # todo: review and define a primary_key=true field for this model.\n");
+        py_code
+            .push_str("    # todo: review and define a primary_key=true field for this model.\n");
     } else if headers.is_empty() && !pk_field_generated_or_identified {
         py_code.push_str("    # no columns inferred, add fields manually\n    pass\n");
     } else if headers.is_empty() && matches!(pk_strategy, PkStrategy::CreateColumn(_)) {
@@ -107,7 +118,11 @@ mod tests {
     use csv::StringRecord;
 
     fn normalize_whitespace(s: &str) -> String {
-        s.lines().map(|line| line.trim()).filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n")
+        s.lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -125,8 +140,12 @@ class SimpleUsers(SQLModel, table=True):
     age: int | None = Field(default=None)
     # todo: review and define a primary_key=true field for this model.
 "#;
-        let generated_python = generate_sqlmodel_python(table_name, &headers, &types, &PkStrategy::None);
-        assert_eq!(normalize_whitespace(&generated_python), normalize_whitespace(expected_python));
+        let generated_python =
+            generate_sqlmodel_python(table_name, &headers, &types, &PkStrategy::None);
+        assert_eq!(
+            normalize_whitespace(&generated_python),
+            normalize_whitespace(expected_python)
+        );
     }
 
     #[test]
@@ -144,8 +163,16 @@ class ProductsTable(SQLModel, table=True):
     product_name: str | None = Field(default=None, max_length=100)
     price: float | None = Field(default=None)
 "#;
-        let generated_python = generate_sqlmodel_python(table_name, &headers, &types, &PkStrategy::ExistingColumn("id".to_string()));
-        assert_eq!(normalize_whitespace(&generated_python), normalize_whitespace(expected_python));
+        let generated_python = generate_sqlmodel_python(
+            table_name,
+            &headers,
+            &types,
+            &PkStrategy::ExistingColumn("id".to_string()),
+        );
+        assert_eq!(
+            normalize_whitespace(&generated_python),
+            normalize_whitespace(expected_python)
+        );
     }
 
     #[test]
@@ -165,15 +192,22 @@ class Items(SQLModel, table=True):
     quantity: int | None = Field(default=None)
 "#;
         let generated_python = generate_sqlmodel_python(table_name, &headers, &types, &pk_strategy);
-        assert_eq!(normalize_whitespace(&generated_python), normalize_whitespace(expected_python));
+        assert_eq!(
+            normalize_whitespace(&generated_python),
+            normalize_whitespace(expected_python)
+        );
     }
 
-     #[test]
+    #[test]
     fn test_generate_model_with_pk_create_shadows_csv_column() {
         let table_name = "events";
         // "event_id" is in csv, but we also ask to create "event_id" as pk
-        let headers = StringRecord::from(vec!["event_id", "event_name", "location"]); 
-        let types = vec![SqlType::Varchar(10), SqlType::Varchar(50), SqlType::Varchar(30)];
+        let headers = StringRecord::from(vec!["event_id", "event_name", "location"]);
+        let types = vec![
+            SqlType::Varchar(10),
+            SqlType::Varchar(50),
+            SqlType::Varchar(30),
+        ];
         let pk_strategy = PkStrategy::CreateColumn("event_id".to_string());
         let expected_python = r#"
 from datetime import date, datetime
@@ -187,7 +221,10 @@ class Events(SQLModel, table=True):
 "#;
         // the event_id from csv (varchar(10)) should be skipped in favor of the created int pk.
         let generated_python = generate_sqlmodel_python(table_name, &headers, &types, &pk_strategy);
-        assert_eq!(normalize_whitespace(&generated_python), normalize_whitespace(expected_python));
+        assert_eq!(
+            normalize_whitespace(&generated_python),
+            normalize_whitespace(expected_python)
+        );
     }
 
     #[test]
@@ -195,13 +232,25 @@ class Events(SQLModel, table=True):
         let table_name = "logs";
         let headers = StringRecord::from(vec!["message", "level"]);
         let types = vec![SqlType::Varchar(200), SqlType::Char(5)];
-        let generated_python = generate_sqlmodel_python(table_name, &headers, &types, &PkStrategy::None);
-        assert!(generated_python.contains("# todo: review and define a primary_key=true field for this model."));
+        let generated_python =
+            generate_sqlmodel_python(table_name, &headers, &types, &PkStrategy::None);
+        assert!(
+            generated_python
+                .contains("# todo: review and define a primary_key=true field for this model.")
+        );
     }
     #[test]
     fn test_generate_model_all_types() {
         let table_name = "comprehensive_data";
-        let headers = StringRecord::from(vec!["user_id", "score", "reg_date", "last_login", "is_active", "notes", "short_code"]);
+        let headers = StringRecord::from(vec![
+            "user_id",
+            "score",
+            "reg_date",
+            "last_login",
+            "is_active",
+            "notes",
+            "short_code",
+        ]);
         let types = vec![
             SqlType::BigInt,
             SqlType::Float,
@@ -226,8 +275,12 @@ class ComprehensiveData(SQLModel, table=True):
     short_code: str | None = Field(default=None, max_length=10)
     # todo: review and define a primary_key=true field for this model.
 "#;
-        let generated_python = generate_sqlmodel_python(table_name, &headers, &types, &PkStrategy::None);
-        assert_eq!(normalize_whitespace(&generated_python), normalize_whitespace(expected_python));
+        let generated_python =
+            generate_sqlmodel_python(table_name, &headers, &types, &PkStrategy::None);
+        assert_eq!(
+            normalize_whitespace(&generated_python),
+            normalize_whitespace(expected_python)
+        );
     }
 
     #[test]
@@ -244,8 +297,12 @@ class EmptyTable(SQLModel, table=True):
     # no columns inferred, add fields manually
     pass
 "#;
-        let generated_python = generate_sqlmodel_python(table_name, &headers, &types, &PkStrategy::None);
-        assert_eq!(normalize_whitespace(&generated_python), normalize_whitespace(expected_python));
+        let generated_python =
+            generate_sqlmodel_python(table_name, &headers, &types, &PkStrategy::None);
+        assert_eq!(
+            normalize_whitespace(&generated_python),
+            normalize_whitespace(expected_python)
+        );
     }
 
     // test for a table name that needs pascal case conversion is implicitly covered

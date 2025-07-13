@@ -2,7 +2,7 @@ TransactionID,ProductName,Quantity,UnitPrice,OrderDate,ShipTimestamp,Notes,IsPri
 1,Laptop,2,1200.50,2023-04-01,2023-04-02 10:30:00,Fragile,true
 2,Mouse,10,25.00,2023-04-03,2023-04-03 15:45:10,,false
 3,Keyboard,5,75.75,2023-04-05,2023-04-06 09:00:00,Mechanical,true
-4,Monitor,1,300,2023-04-10,not-yet-shipped,Handle with care,false
+4,Monitor,1,300,2023-04-10,,Handle with care,false
 5,Webcam,3,49.99,invalid-date,2023-04-12 11:00:00,High resolution,
 6,Desk Lamp,20000000000,19.99,2023-05-01,2023-05-02 14:00:00,,true
 7,Chair,,250.00,2023-05-10,2023-05-11 16:20:30,Ergonomic,false
